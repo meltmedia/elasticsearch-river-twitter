@@ -322,7 +322,11 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
         cb.setUseSSL(true);
 
         TwitterStream stream = new TwitterStreamFactory(cb.build()).getInstance();
-        stream.addListener(new StatusHandler());
+        if ("user".equals(streamType)) {
+          stream.addListener(new RawStatusHandler());
+        } else {
+          stream.addListener(new StatusHandler());
+        }
 
         return stream;
     }
@@ -336,6 +340,8 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
             stream.filter(filterQuery);
         } else if (streamType.equals("firehose")) {
             stream.firehose(0);
+        } else if (streamType.equals("user")) {
+            stream.user();
         } else {
             stream.sample();
         }
@@ -456,6 +462,28 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
             stream.cleanUp();
             stream.shutdown();
         }
+    }
+
+    private class RawStatusHandler implements RawStreamListener {
+      @Override
+      public void onMessage(String rawString) {
+        if (rawString.length() != 0) {
+          bulkProcessor.add(Requests.indexRequest(indexName).type(typeName).create(true).source(rawString));
+        } else {
+          // For some reason raw stream listener gives back empty strings? Lets just ignore those for now.
+        }
+      }
+
+      @Override
+      public void onException(Exception ex) {
+        logger.warn("stream failure, restarting stream...", ex);
+        threadPool.generic().execute(new Runnable() {
+            @Override
+            public void run() {
+                reconnect();
+            }
+        });
+      }
     }
 
     private class StatusHandler extends StatusAdapter {
