@@ -39,10 +39,12 @@ import org.elasticsearch.river.River;
 import org.elasticsearch.river.RiverName;
 import org.elasticsearch.river.RiverSettings;
 import org.elasticsearch.threadpool.ThreadPool;
+
 import twitter4j.*;
 import twitter4j.conf.ConfigurationBuilder;
 import twitter4j.json.DataObjectFactory;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -323,7 +325,7 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
 
         TwitterStream stream = new TwitterStreamFactory(cb.build()).getInstance();
         if ("user".equals(streamType)) {
-          stream.addListener(new RawStatusHandler());
+          stream.addListener(new UserStatusHandler());
         } else {
           stream.addListener(new StatusHandler());
         }
@@ -464,16 +466,155 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
         }
     }
 
-    private class RawStatusHandler implements RawStreamListener {
+    /**
+     * Streaming Types: https://dev.twitter.com/docs/streaming-apis/messages
+     *
+     */
+    private class UserStatusHandler implements UserStreamListener {
+      
       @Override
-      public void onMessage(String rawString) {
-        if (rawString.length() != 0) {
-          bulkProcessor.add(Requests.indexRequest(indexName).type(typeName).create(true).source(rawString));
-        } else {
-          // For some reason raw stream listener gives back empty strings? Lets just ignore those for now.
+      public void onStatus( Status status ) {
+        String json = DataObjectFactory.getRawJSON(status);
+        bulkProcessor.add(Requests.indexRequest(indexName).type("status").create(true).source(json));
+      }
+
+      @Override
+      public void onDeletionNotice( StatusDeletionNotice statusDeletionNotice ) {
+        bulkProcessor.add(Requests.deleteRequest(indexName).type("status").id(Long.toString(statusDeletionNotice.getStatusId())));
+      }
+
+      @Override
+      public void onTrackLimitationNotice( int numberOfLimitedStatuses ) {
+        try {
+          XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+              .startObject("limit")
+              .field("track", numberOfLimitedStatuses)
+              .endObject()
+            .endObject();
+          bulkProcessor.add(Requests.indexRequest(indexName).type("limit").create(true).source(builder));
+        } catch( IOException e ) {
+          logger.info("could not save limit notice.", e);
         }
       }
 
+      @Override
+      public void onScrubGeo( long userId, long upToStatusId ) {
+        // TODO: we must handle this properly or remove the geo information.
+        logger.info("received scrub geo notice, userid {}, up to status id {}", userId, upToStatusId);
+      }
+
+      @Override
+      public void onStallWarning( StallWarning warning ) {
+        String json = DataObjectFactory.getRawJSON(warning);
+        bulkProcessor.add(Requests.indexRequest(indexName).type("stall").create(true).source(json));
+      }
+
+      @Override
+      public void onDeletionNotice( long directMessageId, long userId ) {
+        bulkProcessor.add(Requests.deleteRequest(indexName).type("direct").id(Long.toString(directMessageId)));
+      }
+
+      @Override
+      public void onFriendList( long[] friendIds ) {
+        try {
+          XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+              .field("friends", friendIds)
+            .endObject();
+        } catch( IOException e ) {
+          logger.warn("could not handle friend list", e);
+        }
+      }
+
+      public void onEvent( Object source, Object target, String event, Object targetObject) {
+        try {
+          XContentBuilder builder = XContentFactory.jsonBuilder().startObject()
+            .rawField("source", DataObjectFactory.getRawJSON(source).getBytes())
+            .rawField("target", DataObjectFactory.getRawJSON(target).getBytes())
+            .field("event", event);
+          if( targetObject != null ) {
+            builder.rawField("target_object", DataObjectFactory.getRawJSON(targetObject).getBytes());
+          }
+          builder.endObject();
+          bulkProcessor.add(Requests.indexRequest(indexName).type(event).create(true).source(builder));
+        } catch( IOException e ) {
+          logger.warn(String.format("could not store event %s", event), e);
+        }
+      }
+      
+      @Override
+      public void onFavorite( User source, User target, Status favoritedStatus ) {
+        onEvent(source, target, "favorite", favoritedStatus);
+      }
+
+      @Override
+      public void onUnfavorite( User source, User target, Status unfavoritedStatus ) {
+        onEvent(source, target, "unfavorite", unfavoritedStatus);
+      }
+
+      // NOTE: There is no unfollow here.
+      @Override
+      public void onFollow( User source, User followedUser ) {
+        onEvent(source, followedUser, "follow", null);
+      }
+
+      @Override
+      public void onDirectMessage( DirectMessage directMessage ) {
+        String json = DataObjectFactory.getRawJSON(directMessage);
+        bulkProcessor.add(Requests.indexRequest(indexName).type("direct").id(Long.toString(directMessage.getId())).source(json));
+      }
+
+      @Override
+      public void onUserListMemberAddition( User addedMember, User listOwner, UserList list ) {
+        onEvent(addedMember, listOwner, "list_member_added", list);
+      }
+
+      @Override
+      public void onUserListMemberDeletion( User deletedMember, User listOwner, UserList list ) {
+        onEvent(deletedMember, listOwner, "list_member_removed", list);
+      }
+
+      @Override
+      public void onUserListSubscription( User subscriber, User listOwner, UserList list ) {
+        onEvent(subscriber, listOwner, "list_user_subscribed", list);
+      }
+
+      @Override
+      public void onUserListUnsubscription( User subscriber, User listOwner, UserList list ) {
+        onEvent(subscriber, listOwner, "list_user_unsubscribed", list);
+      }
+
+      @Override
+      public void onUserListCreation( User listOwner, UserList list ) {
+        onEvent(listOwner, listOwner, "list_created", list);
+      }
+
+      @Override
+      public void onUserListUpdate( User listOwner, UserList list ) {
+        onEvent(listOwner, listOwner, "list_updated", list);
+      }
+
+      @Override
+      public void onUserListDeletion( User listOwner, UserList list ) {
+        onEvent(listOwner, listOwner, "list_destroyed", list);
+      }
+
+      @Override
+      public void onUserProfileUpdate( User updatedUser ) {
+        onEvent(updatedUser, updatedUser, "user_update", null);
+     }
+
+      @Override
+      public void onBlock( User source, User blockedUser ) {
+        onEvent(source, blockedUser, "block", null);
+      }
+
+      @Override
+      public void onUnblock( User source, User unblockedUser ) {
+        onEvent(source, unblockedUser, "unblock", null);
+      }
+      
       @Override
       public void onException(Exception ex) {
         logger.warn("stream failure, restarting stream...", ex);
