@@ -522,6 +522,7 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
             .startObject()
               .field("friends", friendIds)
             .endObject();
+          bulkProcessor.add(Requests.indexRequest(indexName).type("friends").create(true).source(builder));
         } catch( IOException e ) {
           logger.warn("could not handle friend list", e);
         }
