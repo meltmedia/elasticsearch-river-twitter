@@ -44,6 +44,6 @@ public class TwitterRiverPlugin extends AbstractPlugin {
     }
 
     public void onModule(RiversModule module) {
-        module.registerRiver("twitter", TwitterRiverModule.class);
+        module.registerRiver("talu-twitter-river", TwitterRiverModule.class);
     }
 }
