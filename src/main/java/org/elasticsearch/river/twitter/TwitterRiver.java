@@ -79,6 +79,7 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
     private final TimeValue bulkFlushInterval;
 
     private FilterQuery filterQuery;
+    private String[] tracks;
 
     private String streamType;
 
@@ -173,8 +174,10 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
                     if (tracks instanceof List) {
                         List<String> lTracks = (List<String>) tracks;
                         filterQuery.track(lTracks.toArray(new String[lTracks.size()]));
+                        this.tracks = lTracks.toArray(new String[lTracks.size()]);
                     } else {
                         filterQuery.track(Strings.commaDelimitedListToStringArray(tracks.toString()));
+                        this.tracks = Strings.commaDelimitedListToStringArray(tracks.toString());
                     }
                     filterSet = true;
                 }
@@ -338,13 +341,18 @@ public class TwitterRiver extends AbstractRiverComponent implements River {
      */
     private void startTwitterStream() {
         logger.info("starting {} twitter stream", streamType);
-        if (streamType.equals("filter") || filterQuery != null) {
+        if (streamType.equals("user")) {
+          if( tracks != null && tracks.length > 0) {
+            stream.user(tracks);
+          }
+          else {
+            stream.user();
+          }
+        } else if (streamType.equals("filter") || filterQuery != null) {
             stream.filter(filterQuery);
         } else if (streamType.equals("firehose")) {
             stream.firehose(0);
-        } else if (streamType.equals("user")) {
-            stream.user();
-        } else {
+        } else  {
             stream.sample();
         }
     }
